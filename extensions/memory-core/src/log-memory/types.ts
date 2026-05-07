@@ -1,5 +1,7 @@
-// Public types for the log-memory subsystem. Lives inside memory-core because
-// memory layering, decay, and dream consolidation are owner-scoped concerns.
+// Public types for the log-memory subsystem. The store is now Markdown-file
+// based; embeddings are no longer persisted with each entry — they are
+// computed on-the-fly via the injected EmbedFn whenever search or dream
+// consolidation needs them.
 
 export type LogMemoryLayer = "episodic" | "semantic" | "procedural";
 
@@ -19,6 +21,9 @@ export interface LogMemoryPayload {
   decayScore: number;
   accessCount: number;
   lastAccessedAt: Date;
+  // Semantic-only metadata. Episodic blocks leave these undefined.
+  title?: string;
+  rootCause?: string;
 }
 
 export interface LogMemoryEntry {
