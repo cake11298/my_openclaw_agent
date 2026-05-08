@@ -137,6 +137,68 @@ describe("LogMemoryStore (file-based)", () => {
     expect(candidates.map((c) => c.payload.content)).toEqual(["ancient"]);
   });
 
+  it("markConsolidated flags entries non-destructively and is hidden by default", async () => {
+    const ts = new Date("2026-05-07T12:00:00Z");
+    await store.appendEpisodic(entry({ ts, content: "old probe failure" }));
+    await store.appendEpisodic(
+      entry({ ts: new Date(ts.getTime() + 60_000), content: "fresh probe failure" }),
+    );
+    const before = await store.loadEpisodic();
+    expect(before).toHaveLength(2);
+    const targetId = before[0].id;
+
+    const at = new Date("2026-05-08T03:00:00Z");
+    const marked = await store.markConsolidated([targetId], at);
+    expect(marked).toBe(1);
+
+    // Default reads skip the consolidated entry.
+    const visible = await store.loadEpisodic();
+    expect(visible).toHaveLength(1);
+    expect(visible[0].id).not.toBe(targetId);
+    expect(await store.countByLayer("episodic")).toBe(1);
+
+    // Raw block still on disk — opt-in to see it.
+    const raw = await store.loadEpisodic({ includeConsolidated: true });
+    expect(raw).toHaveLength(2);
+    const consolidated = raw.find((e) => e.id === targetId);
+    expect(consolidated?.payload.consolidatedAt?.toISOString()).toBe(at.toISOString());
+
+    // The day file was rewritten in place — no fs.rm.
+    const filePath = store.episodicPathFor(ts);
+    const text = await fs.readFile(filePath, "utf8");
+    expect(text).toContain("consolidatedAt: 2026-05-08T03:00:00.000Z");
+    expect(text).toContain("old probe failure");
+    expect(text).toContain("fresh probe failure");
+  });
+
+  it("markConsolidated is a no-op for already-consolidated ids", async () => {
+    const ts = new Date("2026-05-07T12:00:00Z");
+    await store.appendEpisodic(entry({ ts, content: "x" }));
+    const id = (await store.loadEpisodic())[0].id;
+    const at = new Date(ts.getTime() + 60_000);
+    expect(await store.markConsolidated([id], at)).toBe(1);
+    expect(await store.markConsolidated([id], new Date(at.getTime() + 60_000))).toBe(0);
+  });
+
+  it("selectDreamCandidates excludes already-consolidated entries", async () => {
+    const oldTs = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    await store.appendEpisodic(entry({ ts: oldTs, content: "ancient", decay: 0.05 }));
+    const id = (await store.loadEpisodic())[0].id;
+    let candidates = await store.selectDreamCandidates({
+      threshold: 0.25,
+      limit: 100,
+      now: new Date(),
+    });
+    expect(candidates).toHaveLength(1);
+    await store.markConsolidated([id], new Date());
+    candidates = await store.selectDreamCandidates({
+      threshold: 0.25,
+      limit: 100,
+      now: new Date(),
+    });
+    expect(candidates).toHaveLength(0);
+  });
+
   it("loadEpisodic respects daysBack", async () => {
     const today = new Date();
     today.setUTCHours(12, 0, 0, 0);

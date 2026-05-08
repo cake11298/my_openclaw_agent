@@ -312,25 +312,28 @@ Source: dream_consolidation
 - `runDreamCycle` / `DreamScheduler` — selects low-decay episodic candidates
   (`computeCurrentDecay < 0.25`), greedy cosine clustering (≥ 3 members),
   calls the injected `ConsolidateFn`, appends consolidated patterns to
-  `KNOWLEDGE.md`, then **rewrites the consumed entries out of their daily
-  files**.
+  `KNOWLEDGE.md`, then **flags the consumed entries with `consolidatedAt`**
+  in their daily files (non-destructive — see "Forgetting semantics" below).
 - `ensureLogAnalystSkill(workspaceDir)` — writes `skills/log-analyst/SKILL.md`
   on first run only; never overwrites a user-customized version.
 - `DREAM_DAILY_CRON = "0 3 * * *"` — schedule constant the host wires into
   whatever cron / interval seam the agent uses.
 
-### Forgetting semantics (read this before deploying)
+### Forgetting semantics (non-destructive)
 
-The current dream cycle is **destructive**: when episodic blocks get
-consolidated into `KNOWLEDGE.md`, they are removed from the daily Markdown
-files (and an emptied day file is unlinked). Only the consolidated semantic
-summary survives long-term.
+The dream cycle is **non-destructive**, mirroring the `promotedAt` pattern
+used in `extensions/memory-core/src/short-term-promotion.ts`. When episodic
+blocks get consolidated into `KNOWLEDGE.md`, the dream cycle calls
+`store.markConsolidated(ids, now)` rather than removing the blocks. That
+appends a `consolidatedAt: <ISO>` line to each consumed block — the raw logs
+stay on disk for audit / replay, but `loadEpisodic` / `query` /
+`selectDreamCandidates` skip flagged blocks by default. Pass
+`{ includeConsolidated: true }` to see them.
 
-If you need non-destructive forgetting (raw logs preserved for audit; only
-the LLM prompt is compressed), `removeEpisodic` is the seam to swap — replace
-with a `markConsolidated` flag and have `loadEpisodic` skip flagged blocks by
-default. Tests live next to each module under
-`extensions/memory-core/src/log-memory/*.test.ts`.
+Hard delete is still available as `store.removeEpisodic(ids)` for an explicit
+retention job (parallel to `removeGroundedShortTermCandidates` in
+`short-term-promotion.ts`); the dream cycle never invokes it. Tests live next
+to each module under `extensions/memory-core/src/log-memory/*.test.ts`.
 
 ### Embeddings and consolidation are injected
 

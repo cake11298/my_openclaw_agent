@@ -107,7 +107,13 @@ export async function runDreamCycle(deps: {
   }
 
   if (!dryRun && consumed.length > 0) {
-    await deps.store.removeEpisodic(consumed.map((entry) => entry.id));
+    // Non-destructive forgetting: mark the consumed entries as consolidated
+    // (parallel to the `promotedAt` flag in short-term-promotion.ts). The raw
+    // blocks stay on disk for audit / replay; default reads skip them.
+    await deps.store.markConsolidated(
+      consumed.map((entry) => entry.id),
+      now,
+    );
   }
 
   const durationMs = Date.now() - startedAtMs;

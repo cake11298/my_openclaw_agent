@@ -69,7 +69,7 @@ describe("runDreamCycle (file-backed)", () => {
     expect(result.reason).toBe("insufficient_candidates");
   });
 
-  it("consolidates clusters, appends KNOWLEDGE.md, prunes episodic", async () => {
+  it("consolidates clusters, appends KNOWLEDGE.md, marks episodic as consolidated", async () => {
     await seedStaleEpisodic(16);
     expect(await store.countByLayer("episodic")).toBe(16);
 
@@ -88,7 +88,14 @@ describe("runDreamCycle (file-backed)", () => {
     expect(result.status).toBe("completed");
     expect(result.consumed).toBeGreaterThanOrEqual(3);
     expect(result.produced).toBeGreaterThanOrEqual(1);
+
+    // Default count drops because consolidated entries are filtered out, but
+    // the raw blocks are still on disk — non-destructive forgetting.
     expect(await store.countByLayer("episodic")).toBe(16 - result.consumed);
+    const includingConsolidated = await store.loadEpisodic({ includeConsolidated: true });
+    expect(includingConsolidated).toHaveLength(16);
+    const consolidated = includingConsolidated.filter((e) => e.payload.consolidatedAt);
+    expect(consolidated.length).toBe(result.consumed);
 
     const semanticEntries = await store.loadSemantic();
     expect(semanticEntries.length).toBe(result.produced);
@@ -98,6 +105,21 @@ describe("runDreamCycle (file-backed)", () => {
     const knowledge = await fs.readFile(store.semanticPath(), "utf8");
     expect(knowledge).toContain("Probe stuck pattern");
     expect(knowledge).toContain("Source: dream_consolidation");
+  });
+
+  it("a second dream cycle does not re-consolidate already-flagged entries", async () => {
+    await seedStaleEpisodic(16);
+    const consolidate = makeStaticConsolidator({
+      title: "x",
+      pattern: "y",
+      rootCause: "z",
+      tags: [],
+    });
+    await runDreamCycle({ store, embed, consolidate });
+    const result = await runDreamCycle({ store, embed, consolidate });
+    // No fresh candidates left — the second cycle should skip.
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("insufficient_candidates");
   });
 
   it("dry run leaves episodic intact", async () => {

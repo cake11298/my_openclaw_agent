@@ -25,7 +25,9 @@ import type { LogMemoryEntry, LogMemoryLayer, LogMemoryPayload } from "./types.j
 
 const HEADING_RE = /^## \[(?<ts>[^\]]+)\](?<rest>.*)$/;
 const META_LINE_RE = /^(?<key>[A-Za-z][A-Za-z _]*?):\s*(?<value>.*)$/;
-const EPISODIC_META_KEYS = new Set(["decay", "accessCount"]);
+// `consolidatedAt` is optional — only present once the dream cycle has
+// consolidated the entry into the semantic layer.
+const EPISODIC_META_KEYS = new Set(["decay", "accessCount", "consolidatedAt"]);
 const SEMANTIC_META_KEYS = new Set(["Pattern", "Root cause", "Tags", "Source"]);
 
 export function serializeEpisodicBlock(entry: LogMemoryEntry): string {
@@ -37,6 +39,9 @@ export function serializeEpisodicBlock(entry: LogMemoryEntry): string {
     `decay: ${formatNumber(entry.payload.decayScore)}`,
     `accessCount: ${entry.payload.accessCount}`,
   ];
+  if (entry.payload.consolidatedAt) {
+    lines.push(`consolidatedAt: ${entry.payload.consolidatedAt.toISOString()}`);
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -150,6 +155,8 @@ function buildEpisodicEntry(input: {
     .filter((tok) => tok.length > 0);
   const decay = parseNumber(input.metadata.get("decay"), 0);
   const accessCount = Math.max(0, Math.floor(parseNumber(input.metadata.get("accessCount"), 0)));
+  const consolidatedAtRaw = input.metadata.get("consolidatedAt");
+  const consolidatedAt = consolidatedAtRaw ? parseConsolidatedAt(consolidatedAtRaw) : undefined;
   const service = extractServiceFromTags(tags);
   const id = computeEntryId({
     timestamp: input.timestamp,
@@ -168,8 +175,18 @@ function buildEpisodicEntry(input: {
       decayScore: decay,
       accessCount,
       lastAccessedAt: input.timestamp,
+      consolidatedAt,
     },
   };
+}
+
+function parseConsolidatedAt(raw: string): Date | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
 function buildSemanticEntry(input: {

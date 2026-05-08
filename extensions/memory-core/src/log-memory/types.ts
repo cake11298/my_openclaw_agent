@@ -21,6 +21,11 @@ export interface LogMemoryPayload {
   decayScore: number;
   accessCount: number;
   lastAccessedAt: Date;
+  // Set by the dream cycle when this entry has been consolidated into a
+  // semantic block. Once set, default loads/queries skip the entry but the
+  // raw block stays on disk for audit/replay. Mirrors the `promotedAt` flag
+  // on ShortTermRecallEntry in short-term-promotion.ts.
+  consolidatedAt?: Date;
   // Semantic-only metadata. Episodic blocks leave these undefined.
   title?: string;
   rootCause?: string;

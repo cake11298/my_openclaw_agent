@@ -72,8 +72,15 @@ export class LogMemoryStore {
     await fs.appendFile(filePath, ensureLeadingBlankLine(filePath, block), "utf8");
   }
 
-  async loadEpisodic(opts?: { daysBack?: number }): Promise<LogMemoryEntry[]> {
+  // Default loads skip entries that have been consolidated by a dream cycle —
+  // mirrors the `!includePromoted && entry.promotedAt` filter in
+  // short-term-promotion.ts. Pass { includeConsolidated: true } to see them.
+  async loadEpisodic(opts?: {
+    daysBack?: number;
+    includeConsolidated?: boolean;
+  }): Promise<LogMemoryEntry[]> {
     const daysBack = opts?.daysBack;
+    const includeConsolidated = opts?.includeConsolidated ?? false;
     const files = await this.listEpisodicFiles();
     let selected = files;
     if (typeof daysBack === "number") {
@@ -87,7 +94,12 @@ export class LogMemoryStore {
         continue;
       }
       const entries = parseBlocks(text, { layer: "episodic" });
-      out.push(...entries);
+      for (const entry of entries) {
+        if (!includeConsolidated && entry.payload.consolidatedAt) {
+          continue;
+        }
+        out.push(entry);
+      }
     }
     out.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
     return out;
@@ -101,18 +113,26 @@ export class LogMemoryStore {
     return parseBlocks(text, { layer: "semantic" });
   }
 
-  async loadAll(opts?: { daysBack?: number }): Promise<LogMemoryEntry[]> {
+  async loadAll(opts?: {
+    daysBack?: number;
+    includeConsolidated?: boolean;
+  }): Promise<LogMemoryEntry[]> {
     const [episodic, semantic] = await Promise.all([this.loadEpisodic(opts), this.loadSemantic()]);
     return [...episodic, ...semantic];
   }
 
-  async countByLayer(layer: LogMemoryLayer): Promise<number> {
+  async countByLayer(
+    layer: LogMemoryLayer,
+    opts?: { includeConsolidated?: boolean },
+  ): Promise<number> {
     if (layer === "semantic") {
       const entries = await this.loadSemantic();
       return entries.length;
     }
     if (layer === "episodic") {
-      const entries = await this.loadEpisodic();
+      const entries = await this.loadEpisodic({
+        includeConsolidated: opts?.includeConsolidated,
+      });
       return entries.length;
     }
     return 0;
@@ -123,12 +143,51 @@ export class LogMemoryStore {
     limit: number;
     now: Date;
   }): Promise<LogMemoryEntry[]> {
-    const entries = await this.loadEpisodic();
+    // Already-consolidated entries are not eligible candidates.
+    const entries = await this.loadEpisodic({ includeConsolidated: false });
     return entries
       .filter((entry) => computeCurrentDecay(entry, opts.now) < opts.threshold)
       .slice(0, opts.limit);
   }
 
+  // Non-destructive forgetting: stamp the consolidatedAt timestamp on each
+  // matched entry and rewrite the daily file in place. Default reads will
+  // hide the entry afterwards but the raw block stays on disk for audit /
+  // replay (mirrors the promotedAt pattern in short-term-promotion.ts).
+  async markConsolidated(ids: Iterable<string>, consolidatedAt: Date): Promise<number> {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) {
+      return 0;
+    }
+    const files = await this.listEpisodicFiles();
+    let marked = 0;
+    for (const file of files) {
+      const text = await safeReadFile(file.path);
+      if (text === null) {
+        continue;
+      }
+      const entries = parseBlocks(text, { layer: "episodic" });
+      let mutated = false;
+      for (const entry of entries) {
+        if (!idSet.has(entry.id) || entry.payload.consolidatedAt) {
+          continue;
+        }
+        entry.payload.consolidatedAt = consolidatedAt;
+        marked++;
+        mutated = true;
+      }
+      if (!mutated) {
+        continue;
+      }
+      const rewritten = entries.map((entry) => serializeEpisodicBlock(entry)).join("\n");
+      await atomicWriteFile(file.path, rewritten);
+    }
+    return marked;
+  }
+
+  // Explicit cleanup escape hatch — parallel to `removeGroundedShortTermCandidates`
+  // in short-term-promotion.ts. The dream cycle never calls this. Hosts can
+  // invoke it from a separate retention job (e.g. drop entries older than 90d).
   async removeEpisodic(ids: Iterable<string>): Promise<number> {
     const idSet = new Set(ids);
     if (idSet.size === 0) {

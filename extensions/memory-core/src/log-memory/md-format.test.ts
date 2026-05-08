@@ -93,6 +93,38 @@ describe("md-format episodic", () => {
     const [parsed] = parseBlocks(text, { layer: "episodic" });
     expect(parsed.payload.content).toBe("first line\nsecond line\nthird line");
   });
+
+  it("round-trips an optional consolidatedAt timestamp", () => {
+    const ts = new Date(ISO_TS);
+    const entry: LogMemoryEntry = {
+      id: "x",
+      timestamp: ts,
+      layer: "episodic",
+      payload: {
+        type: "raw_log",
+        content: "consumed log",
+        tags: ["level:ERROR"],
+        source: "log_ingest",
+        decayScore: 0.05,
+        accessCount: 0,
+        lastAccessedAt: ts,
+        consolidatedAt: new Date("2026-05-08T03:00:00.000Z"),
+      },
+    };
+    const text = serializeEpisodicBlock(entry);
+    expect(text).toContain("consolidatedAt: 2026-05-08T03:00:00.000Z");
+    const [parsed] = parseBlocks(text, { layer: "episodic" });
+    expect(parsed.payload.consolidatedAt?.toISOString()).toBe("2026-05-08T03:00:00.000Z");
+    expect(parsed.payload.content).toBe("consumed log");
+  });
+
+  it("omits consolidatedAt when absent", () => {
+    const entry = episodic("untouched", ["level:INFO"]);
+    const text = serializeEpisodicBlock(entry);
+    expect(text).not.toContain("consolidatedAt");
+    const [parsed] = parseBlocks(text, { layer: "episodic" });
+    expect(parsed.payload.consolidatedAt).toBeUndefined();
+  });
 });
 
 describe("md-format semantic", () => {
