@@ -33,14 +33,16 @@ describe("LogIngestor (file-backed)", () => {
   });
 
   it("dedupes identical logs across calls", async () => {
-    const ingestor = new LogIngestor({ store, embed });
+    const fixedNow = () => new Date("2026-05-07T12:00:00Z");
+    const pinnedStore = new LogMemoryStore({ workspaceDir: workspace.dir, now: fixedNow });
+    const ingestor = new LogIngestor({ store: pinnedStore, embed, now: fixedNow });
     const line = "2026-05-07T12:00:00Z ERROR diagfw probe disconnected";
     const meta = { service: "diagfw", host: "dut-01" };
     await ingestor.ingest(line, meta);
     const second = await ingestor.ingest(line, meta);
     expect(second.inserted).toHaveLength(0);
     expect(second.skipped).toBeGreaterThan(0);
-    expect(await store.countByLayer("episodic")).toBe(1);
+    expect(await pinnedStore.countByLayer("episodic")).toBe(1);
   });
 
   it("chunks long messages with overlap", async () => {
@@ -75,7 +77,9 @@ describe("LogIngestor (file-backed)", () => {
   });
 
   it("hybrid query returns scored results and bumps accessCount", async () => {
-    const ingestor = new LogIngestor({ store, embed });
+    const fixedNow = () => new Date("2026-05-07T12:00:00Z");
+    const pinnedStore = new LogMemoryStore({ workspaceDir: workspace.dir, now: fixedNow });
+    const ingestor = new LogIngestor({ store: pinnedStore, embed, now: fixedNow });
     await ingestor.ingest("2026-05-07T12:00:00Z ERROR diagfw broken sensor on dut-01", {
       service: "diagfw",
       host: "dut-01",
@@ -93,7 +97,7 @@ describe("LogIngestor (file-backed)", () => {
       6,
     );
 
-    const after = await store.loadEpisodic();
+    const after = await pinnedStore.loadEpisodic();
     const matched = after.find((entry) => entry.payload.content.includes("broken sensor"));
     expect(matched?.payload.accessCount).toBe(1);
   });

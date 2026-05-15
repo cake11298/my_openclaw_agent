@@ -31,13 +31,15 @@ export interface LogMemoryHybridResult {
 
 export class LogMemoryStore {
   private readonly rootDir: string;
+  private readonly _now: () => Date;
 
   static resolveRootDir(workspaceDir: string): string {
     return path.join(workspaceDir, EPISODIC_DIR);
   }
 
-  constructor(opts: { workspaceDir: string }) {
+  constructor(opts: { workspaceDir: string; now?: () => Date }) {
     this.rootDir = LogMemoryStore.resolveRootDir(opts.workspaceDir);
+    this._now = opts.now ?? (() => new Date());
     fsSync.mkdirSync(this.rootDir, { recursive: true });
   }
 
@@ -84,7 +86,7 @@ export class LogMemoryStore {
     const files = await this.listEpisodicFiles();
     let selected = files;
     if (typeof daysBack === "number") {
-      const allowed = recentDayKeys(daysBack + 1);
+      const allowed = recentDayKeys(daysBack + 1, this._now());
       selected = files.filter((file) => allowed.has(file.key));
     }
     const out: LogMemoryEntry[] = [];
