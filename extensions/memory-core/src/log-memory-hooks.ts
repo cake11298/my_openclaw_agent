@@ -1,5 +1,13 @@
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { EmbedFn } from "./log-memory/types.js";
+
+// PluginHookMessageContext does not carry workspaceDir, so fall back to the
+// default OpenClaw workspace path (~/.openclaw/workspace).
+function resolveWorkspaceDir(ctxWorkspaceDir: string | undefined): string {
+  return ctxWorkspaceDir ?? path.join(os.homedir(), ".openclaw", "workspace");
+}
 
 // No-op embedder: returns zero-length vectors so capture (which never calls
 // embed) works without a real model. buildPinnedContext also works because it
@@ -40,8 +48,10 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
   // Capture: scan every incoming user message for rules/conventions and write
   // them to KNOWLEDGE.md immediately, pinned so they never decay.
   api.on("message_received", async (event, ctx) => {
-    const workspaceDir = ctx.workspaceDir;
-    if (!workspaceDir || !event.content?.trim()) return;
+    const workspaceDir = resolveWorkspaceDir(
+      (ctx as Record<string, unknown>).workspaceDir as string | undefined,
+    );
+    if (!event.content?.trim()) return;
     try {
       const { capture } = await getComponents(workspaceDir);
       await capture.maybeCapture({ message: event.content });
@@ -55,8 +65,9 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
   // Inject: prepend all pinned rules to the system prompt before each LLM call
   // so the model always sees active conventions regardless of query relevance.
   api.on("before_prompt_build", async (_event, ctx) => {
-    const workspaceDir = ctx.workspaceDir;
-    if (!workspaceDir) return undefined;
+    const workspaceDir = resolveWorkspaceDir(
+      (ctx as Record<string, unknown>).workspaceDir as string | undefined,
+    );
     try {
       const { injector } = await getComponents(workspaceDir);
       const pinnedCtx = await injector.buildPinnedContext();
