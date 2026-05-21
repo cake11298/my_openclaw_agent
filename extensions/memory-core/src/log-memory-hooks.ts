@@ -5,6 +5,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { EmbedFn } from "./log-memory/types.js";
 
 const INJECTION_REPORT_FILENAME = ".injection-report.json";
+const CONVERSATION_PROMPT_FILENAME = "conversation_prompt.md";
 
 // PluginHookMessageContext does not carry workspaceDir, so fall back to the
 // default OpenClaw workspace path (~/.openclaw/workspace).
@@ -76,13 +77,31 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
       const pinnedCtx = await injector.buildPinnedContext();
       if (!pinnedCtx) return undefined;
 
+      const logMemoryDir = path.join(workspaceDir, "log-memory");
+      const conversationPromptPath = path.join(logMemoryDir, CONVERSATION_PROMPT_FILENAME);
+
+      // Dump injected prompt for engineering inspection.
+      const promptDump = [
+        `# Injected Prompt Snapshot`,
+        ``,
+        `Generated: ${new Date().toISOString()}`,
+        `Workspace: ${workspaceDir}`,
+        `Chars: ${pinnedCtx.length}`,
+        ``,
+        `## KNOWLEDGE.md`,
+        ``,
+        pinnedCtx,
+      ].join("\n");
+      await fs.writeFile(conversationPromptPath, promptDump, "utf8").catch(() => {});
+
       // Write sidecar so system-prompt-report can show injection in Usage Tab.
-      const sidecarPath = path.join(workspaceDir, "log-memory", INJECTION_REPORT_FILENAME);
+      const sidecarPath = path.join(logMemoryDir, INJECTION_REPORT_FILENAME);
       await fs
         .writeFile(
           sidecarPath,
           JSON.stringify({
             ts: Date.now(),
+            conversationPromptPath,
             sources: [{ name: "KNOWLEDGE.md", chars: pinnedCtx.length }],
           }),
           "utf8",

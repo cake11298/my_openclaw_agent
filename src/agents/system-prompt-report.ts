@@ -10,16 +10,21 @@ const LOG_MEMORY_SIDECAR = path.join("log-memory", ".injection-report.json");
 const SIDECAR_MAX_AGE_MS = 5 * 60 * 1000;
 
 type InjectionSource = { name: string; chars: number };
+type LogMemorySidecar = {
+  ts: number;
+  conversationPromptPath?: string;
+  sources: InjectionSource[];
+};
 
-function readLogMemoryInjectionSources(workspaceDir?: string): InjectionSource[] {
-  if (!workspaceDir) return [];
+function readLogMemorySidecar(workspaceDir?: string): LogMemorySidecar | null {
+  if (!workspaceDir) return null;
   try {
     const raw = fsSync.readFileSync(path.join(workspaceDir, LOG_MEMORY_SIDECAR), "utf8");
-    const data = JSON.parse(raw) as { ts: number; sources: InjectionSource[] };
-    if (!Array.isArray(data.sources) || Date.now() - data.ts > SIDECAR_MAX_AGE_MS) return [];
-    return data.sources;
+    const data = JSON.parse(raw) as LogMemorySidecar;
+    if (!Array.isArray(data.sources) || Date.now() - data.ts > SIDECAR_MAX_AGE_MS) return null;
+    return data;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -153,13 +158,18 @@ export function buildSystemPromptReport(params: {
         bootstrapFiles: params.bootstrapFiles,
         injectedFiles: params.injectedFiles,
       }),
-      ...readLogMemoryInjectionSources(params.workspaceDir).map((s) => ({
-        name: s.name,
-        path: `log-memory/${s.name}`,
-        missing: false,
-        rawChars: s.chars,
-        injectedChars: s.chars,
-      })),
+      ...(() => {
+        const sidecar = readLogMemorySidecar(params.workspaceDir);
+        if (!sidecar) return [];
+        return sidecar.sources.map((s) => ({
+          name: s.name,
+          path: sidecar.conversationPromptPath ?? `log-memory/${s.name}`,
+          missing: false,
+          rawChars: s.chars,
+          injectedChars: s.chars,
+          truncated: false,
+        }));
+      })(),
     ],
     skills: {
       promptChars: params.skillsPrompt.length,
