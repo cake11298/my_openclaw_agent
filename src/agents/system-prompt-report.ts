@@ -1,8 +1,27 @@
+import fsSync from "node:fs";
+import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+const LOG_MEMORY_SIDECAR = path.join("log-memory", ".injection-report.json");
+const SIDECAR_MAX_AGE_MS = 5 * 60 * 1000;
+
+type InjectionSource = { name: string; chars: number };
+
+function readLogMemoryInjectionSources(workspaceDir?: string): InjectionSource[] {
+  if (!workspaceDir) return [];
+  try {
+    const raw = fsSync.readFileSync(path.join(workspaceDir, LOG_MEMORY_SIDECAR), "utf8");
+    const data = JSON.parse(raw) as { ts: number; sources: InjectionSource[] };
+    if (!Array.isArray(data.sources) || Date.now() - data.ts > SIDECAR_MAX_AGE_MS) return [];
+    return data.sources;
+  } catch {
+    return [];
+  }
+}
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 
@@ -129,10 +148,19 @@ export function buildSystemPromptReport(params: {
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
-    injectedWorkspaceFiles: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
-    }),
+    injectedWorkspaceFiles: [
+      ...buildBootstrapInjectionStats({
+        bootstrapFiles: params.bootstrapFiles,
+        injectedFiles: params.injectedFiles,
+      }),
+      ...readLogMemoryInjectionSources(params.workspaceDir).map((s) => ({
+        name: s.name,
+        path: `log-memory/${s.name}`,
+        missing: false,
+        rawChars: s.chars,
+        injectedChars: s.chars,
+      })),
+    ],
     skills: {
       promptChars: params.skillsPrompt.length,
       entries: skillsEntries,
