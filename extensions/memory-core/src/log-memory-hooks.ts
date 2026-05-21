@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { EmbedFn } from "./log-memory/types.js";
+
+const INJECTION_REPORT_FILENAME = ".injection-report.json";
 
 // PluginHookMessageContext does not carry workspaceDir, so fall back to the
 // default OpenClaw workspace path (~/.openclaw/workspace).
@@ -72,6 +75,20 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
       const { injector } = await getComponents(workspaceDir);
       const pinnedCtx = await injector.buildPinnedContext();
       if (!pinnedCtx) return undefined;
+
+      // Write sidecar so system-prompt-report can show injection in Usage Tab.
+      const sidecarPath = path.join(workspaceDir, "log-memory", INJECTION_REPORT_FILENAME);
+      await fs
+        .writeFile(
+          sidecarPath,
+          JSON.stringify({
+            ts: Date.now(),
+            sources: [{ name: "KNOWLEDGE.md", chars: pinnedCtx.length }],
+          }),
+          "utf8",
+        )
+        .catch(() => {});
+
       return { prependSystemContext: pinnedCtx };
     } catch (err) {
       api.logger.warn(
