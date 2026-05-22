@@ -23,6 +23,7 @@ const noopEmbed: EmbedFn = async (texts) => texts.map(() => new Float32Array(0))
 interface LogMemoryComponents {
   capture: import("./log-memory/knowledge-capture.js").KnowledgeCapture;
   injector: import("./log-memory/context-injector.js").ContextInjector;
+  store: import("./log-memory/store.js").LogMemoryStore;
 }
 const componentCache = new Map<string, LogMemoryComponents>();
 
@@ -43,7 +44,7 @@ async function getComponents(workspaceDir: string): Promise<LogMemoryComponents>
   const ingestor = new LogIngestor({ store, embed: noopEmbed });
   const injector = new ContextInjector(ingestor);
 
-  const components: LogMemoryComponents = { capture, injector };
+  const components: LogMemoryComponents = { capture, injector, store };
   componentCache.set(workspaceDir, components);
   return components;
 }
@@ -57,8 +58,28 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
     );
     if (!event.content?.trim()) return;
     try {
-      const { capture } = await getComponents(workspaceDir);
-      await capture.maybeCapture({ message: event.content });
+      const { capture, store } = await getComponents(workspaceDir);
+      const captured = await capture.maybeCapture({ message: event.content });
+      if (captured && !captured.alreadyExisted) {
+        const subagent = api.runtime?.subagent;
+        if (subagent) {
+          import("./log-memory/knowledge-curator.js")
+            .then(({ curateKnowledgeMd }) =>
+              curateKnowledgeMd({
+                subagent,
+                store,
+                workspaceDir,
+                newEntry: captured.entry,
+                logger: api.logger,
+              }),
+            )
+            .catch((err: unknown) => {
+              api.logger.warn(
+                `log-memory: background curation error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+        }
+      }
     } catch (err) {
       api.logger.warn(
         `log-memory: capture failed: ${err instanceof Error ? err.message : String(err)}`,

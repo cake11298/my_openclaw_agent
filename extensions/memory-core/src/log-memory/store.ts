@@ -74,6 +74,16 @@ export class LogMemoryStore {
     await fs.appendFile(filePath, ensureLeadingBlankLine(filePath, block), "utf8");
   }
 
+  async overwriteSemantic(entries: LogMemoryEntry[]): Promise<void> {
+    const filePath = this.semanticPath();
+    if (entries.length === 0) {
+      await fs.rm(filePath, { force: true }).catch(() => {});
+      return;
+    }
+    const content = entries.map((e) => serializeSemanticBlock(e)).join("\n");
+    await atomicWriteFile(filePath, content);
+  }
+
   // Default loads skip entries that have been consolidated by a dream cycle —
   // mirrors the `!includePromoted && entry.promotedAt` filter in
   // short-term-promotion.ts. Pass { includeConsolidated: true } to see them.
