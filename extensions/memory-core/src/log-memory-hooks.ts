@@ -5,6 +5,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { EmbedFn } from "./log-memory/types.js";
 
 const INJECTION_REPORT_FILENAME = ".injection-report.json";
+const CONVERSATION_PROMPT_FILENAME = "conversation_prompt.md";
 
 // PluginHookMessageContext does not carry workspaceDir, so fall back to the
 // default OpenClaw workspace path (~/.openclaw/workspace).
@@ -22,6 +23,7 @@ const noopEmbed: EmbedFn = async (texts) => texts.map(() => new Float32Array(0))
 interface LogMemoryComponents {
   capture: import("./log-memory/knowledge-capture.js").KnowledgeCapture;
   injector: import("./log-memory/context-injector.js").ContextInjector;
+  store: import("./log-memory/store.js").LogMemoryStore;
 }
 const componentCache = new Map<string, LogMemoryComponents>();
 
@@ -42,7 +44,7 @@ async function getComponents(workspaceDir: string): Promise<LogMemoryComponents>
   const ingestor = new LogIngestor({ store, embed: noopEmbed });
   const injector = new ContextInjector(ingestor);
 
-  const components: LogMemoryComponents = { capture, injector };
+  const components: LogMemoryComponents = { capture, injector, store };
   componentCache.set(workspaceDir, components);
   return components;
 }
@@ -56,8 +58,28 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
     );
     if (!event.content?.trim()) return;
     try {
-      const { capture } = await getComponents(workspaceDir);
-      await capture.maybeCapture({ message: event.content });
+      const { capture, store } = await getComponents(workspaceDir);
+      const captured = await capture.maybeCapture({ message: event.content });
+      if (captured && !captured.alreadyExisted) {
+        const subagent = api.runtime?.subagent;
+        if (subagent) {
+          import("./log-memory/knowledge-curator.js")
+            .then(({ curateKnowledgeMd }) =>
+              curateKnowledgeMd({
+                subagent,
+                store,
+                workspaceDir,
+                newEntry: captured.entry,
+                logger: api.logger,
+              }),
+            )
+            .catch((err: unknown) => {
+              api.logger.warn(
+                `log-memory: background curation error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+        }
+      }
     } catch (err) {
       api.logger.warn(
         `log-memory: capture failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -76,13 +98,31 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
       const pinnedCtx = await injector.buildPinnedContext();
       if (!pinnedCtx) return undefined;
 
+      const logMemoryDir = path.join(workspaceDir, "log-memory");
+      const conversationPromptPath = path.join(logMemoryDir, CONVERSATION_PROMPT_FILENAME);
+
+      // Dump injected prompt for engineering inspection.
+      const promptDump = [
+        `# Injected Prompt Snapshot`,
+        ``,
+        `Generated: ${new Date().toISOString()}`,
+        `Workspace: ${workspaceDir}`,
+        `Chars: ${pinnedCtx.length}`,
+        ``,
+        `## KNOWLEDGE.md`,
+        ``,
+        pinnedCtx,
+      ].join("\n");
+      await fs.writeFile(conversationPromptPath, promptDump, "utf8").catch(() => {});
+
       // Write sidecar so system-prompt-report can show injection in Usage Tab.
-      const sidecarPath = path.join(workspaceDir, "log-memory", INJECTION_REPORT_FILENAME);
+      const sidecarPath = path.join(logMemoryDir, INJECTION_REPORT_FILENAME);
       await fs
         .writeFile(
           sidecarPath,
           JSON.stringify({
             ts: Date.now(),
+            conversationPromptPath,
             sources: [{ name: "KNOWLEDGE.md", chars: pinnedCtx.length }],
           }),
           "utf8",

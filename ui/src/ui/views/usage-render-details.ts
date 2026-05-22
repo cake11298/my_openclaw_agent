@@ -977,11 +977,29 @@ function renderContextPanel(
                   <div class="context-breakdown-list">
                     ${filesTop.map(
                       (f) => html`
-                        <div class="context-breakdown-item">
-                          <span class="mono">${f.name}</span>
-                          <span class="muted"
-                            >~${formatTokens(charsToTokens(f.injectedChars))}</span
-                          >
+                        <div class="context-breakdown-item context-breakdown-item--file">
+                          <div class="context-breakdown-item-main">
+                            <span class="mono">${f.name}</span>
+                            <span class="muted">
+                              ~${formatTokens(charsToTokens(f.injectedChars))}
+                              ${totalContextTokens > 0
+                                ? html`<span class="context-pct"
+                                    >(${pct(
+                                      charsToTokens(f.injectedChars),
+                                      totalContextTokens,
+                                    ).toFixed(1)}%)</span
+                                  >`
+                                : nothing}
+                            </span>
+                          </div>
+                          ${f.path
+                            ? html`<div
+                                class="context-breakdown-item-path muted mono"
+                                title="${f.path}"
+                              >
+                                ${f.path}
+                              </div>`
+                            : nothing}
                         </div>
                       `,
                     )}
