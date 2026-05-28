@@ -89,7 +89,7 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
 
   // Inject: prepend all pinned rules to the system prompt before each LLM call
   // so the model always sees active conventions regardless of query relevance.
-  api.on("before_prompt_build", async (_event, ctx) => {
+  api.on("before_prompt_build", async (event, ctx) => {
     const workspaceDir = resolveWorkspaceDir(
       (ctx as Record<string, unknown>).workspaceDir as string | undefined,
     );
@@ -101,6 +101,10 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
       const logMemoryDir = path.join(workspaceDir, "log-memory");
       const conversationPromptPath = path.join(logMemoryDir, CONVERSATION_PROMPT_FILENAME);
 
+      const prevMsgCount = Array.isArray((event as { messages?: unknown[] }).messages)
+        ? ((event as { messages: unknown[] }).messages.length ?? 0)
+        : 0;
+
       // Dump injected prompt for engineering inspection.
       const promptDump = [
         `# Injected Prompt Snapshot`,
@@ -108,6 +112,9 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
         `Generated: ${new Date().toISOString()}`,
         `Workspace: ${workspaceDir}`,
         `Chars: ${pinnedCtx.length}`,
+        ...(prevMsgCount > 0
+          ? [`Previous chat: ${prevMsgCount} message${prevMsgCount === 1 ? "" : "s"} injected`]
+          : []),
         ``,
         `## KNOWLEDGE.md`,
         ``,
