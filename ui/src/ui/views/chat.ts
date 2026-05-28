@@ -799,12 +799,13 @@ function renderSlashMenu(
 }
 
 // Shows the injected system prompt as a collapsible chat-bubble styled row
-// at the top of the thread, visually similar to a user message but gray.
-// Fetches from the memory-core plugin HTTP route lazily on first expand.
+// at the top of the thread, on the user (right) side.
+// Re-fetches on every open so the content stays fresh across turns.
 function renderSysPromptBubble(gatewayUrl: string, requestUpdate: () => void): TemplateResult {
   const toggle = () => {
     vs.sysPromptOpen = !vs.sysPromptOpen;
-    if (vs.sysPromptOpen && !vs.sysPromptFetching && vs.sysPromptContent === null) {
+    // Always re-fetch when opening so content reflects the latest injection.
+    if (vs.sysPromptOpen && !vs.sysPromptFetching) {
       vs.sysPromptFetching = true;
       fetch(`${gatewayUrl}/api/log-memory/context`)
         .then((r) => r.json() as Promise<{ ok: boolean; content: string | null }>)
@@ -823,21 +824,7 @@ function renderSysPromptBubble(gatewayUrl: string, requestUpdate: () => void): T
   };
 
   return html`
-    <div class="chat-group chat-group--sys-prompt">
-      <div class="chat-avatar chat-avatar--sys-prompt">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          width="16"
-          height="16"
-          stroke="currentColor"
-          stroke-width="1.5"
-        >
-          <path
-            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-          />
-        </svg>
-      </div>
+    <div class="chat-group chat-group--sys-prompt user">
       <div class="chat-group-messages">
         <button class="chat-bubble chat-bubble--sys-prompt" type="button" @click=${toggle}>
           <span class="sys-prompt-label">System context</span>
