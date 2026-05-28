@@ -41,12 +41,12 @@ When merging a newer upstream `chat.ts`:
 
 1. Re-add `logMemoryGatewayUrl?: string | null` to `ChatProps`
 2. Re-add `sysPromptOpen / sysPromptContent / sysPromptFetching` to `ChatEphemeralState` + `createChatEphemeralState`
-3. Re-add `renderSysPromptPanel()` function (search for `// Collapsible floating panel`)
-4. Re-add the `${props.logMemoryGatewayUrl ? renderSysPromptPanel(...) : nothing}` call after `renderContextNotice`
+3. Re-add `renderSysPromptBubble()` function (search for `// System context bubble`)
+4. Re-add the `${props.logMemoryGatewayUrl && !vs.searchOpen ? renderSysPromptBubble(...) : nothing}` call inside `chat-thread-inner` before messages
 
 When merging a newer `layout.css`:
 
-- Append the `/* ── Injected system-prompt panel */` block from the end of the current file.
+- Append the `/* ── Injected system-prompt bubble (memory-core log-memory) */` block from the end of the current file.
 
 When merging a newer `app-render.ts`:
 
