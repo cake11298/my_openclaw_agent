@@ -137,4 +137,26 @@ export function registerLogMemoryHooks(api: OpenClawPluginApi): void {
       return undefined;
     }
   });
+
+  // HTTP route: GET /api/log-memory/context
+  // Returns the most recent conversation_prompt.md content as JSON so the
+  // chat UI can display the injected system prompt in a floating panel.
+  // CORS headers allow the canvas host (different port) to fetch this.
+  api.registerHttpRoute({
+    path: "/api/log-memory/context",
+    auth: "plugin",
+    match: "exact",
+    handler: async (_req, res) => {
+      const workspaceDir = resolveWorkspaceDir(undefined);
+      const filePath = path.join(workspaceDir, "log-memory", CONVERSATION_PROMPT_FILENAME);
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      try {
+        const content = await fs.readFile(filePath, "utf8");
+        res.end(JSON.stringify({ ok: true, content }));
+      } catch {
+        res.end(JSON.stringify({ ok: false, content: null }));
+      }
+    },
+  });
 }

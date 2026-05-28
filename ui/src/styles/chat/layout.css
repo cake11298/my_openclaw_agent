@@ -1405,3 +1405,52 @@
 
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
+
+/* ── Injected system-prompt panel (memory-core log-memory) ──────────────── */
+.sys-prompt-panel {
+  align-self: stretch;
+  margin: 4px 12px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.sys-prompt-panel__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: var(--font-body);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sys-prompt-panel__toggle:hover {
+  color: var(--text);
+  background: var(--panel-strong);
+}
+
+.sys-prompt-panel__chevron {
+  margin-left: auto;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.sys-prompt-panel__body {
+  margin: 0;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-y: auto;
+  max-height: 220px;
+}
