@@ -798,18 +798,18 @@ function renderSlashMenu(
   `;
 }
 
-// Collapsible floating panel that shows the latest injected system prompt
-// (conversation_prompt.md) served by the memory-core plugin HTTP route.
-// Fetches lazily on first open and on every subsequent open.
-function renderSysPromptPanel(gatewayUrl: string, requestUpdate: () => void): TemplateResult {
+// Shows the injected system prompt as a collapsible chat-bubble styled row
+// at the top of the thread, visually similar to a user message but gray.
+// Fetches from the memory-core plugin HTTP route lazily on first expand.
+function renderSysPromptBubble(gatewayUrl: string, requestUpdate: () => void): TemplateResult {
   const toggle = () => {
     vs.sysPromptOpen = !vs.sysPromptOpen;
-    if (vs.sysPromptOpen && !vs.sysPromptFetching) {
+    if (vs.sysPromptOpen && !vs.sysPromptFetching && vs.sysPromptContent === null) {
       vs.sysPromptFetching = true;
       fetch(`${gatewayUrl}/api/log-memory/context`)
         .then((r) => r.json() as Promise<{ ok: boolean; content: string | null }>)
         .then((data) => {
-          vs.sysPromptContent = data.ok ? data.content : "(empty — no prompt injected yet)";
+          vs.sysPromptContent = data.ok ? (data.content ?? "") : "";
         })
         .catch(() => {
           vs.sysPromptContent = "(fetch failed — is the gateway running?)";
@@ -823,16 +823,34 @@ function renderSysPromptPanel(gatewayUrl: string, requestUpdate: () => void): Te
   };
 
   return html`
-    <div class="sys-prompt-panel ${vs.sysPromptOpen ? "sys-prompt-panel--open" : ""}">
-      <button class="sys-prompt-panel__toggle" type="button" @click=${toggle}>
-        ${icons.book ?? "📋"} System context
-        <span class="sys-prompt-panel__chevron">${vs.sysPromptOpen ? "▲" : "▼"}</span>
-      </button>
-      ${vs.sysPromptOpen
-        ? html`<pre class="sys-prompt-panel__body">
+    <div class="chat-group chat-group--sys-prompt">
+      <div class="chat-avatar chat-avatar--sys-prompt">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          width="16"
+          height="16"
+          stroke="currentColor"
+          stroke-width="1.5"
+        >
+          <path
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+          />
+        </svg>
+      </div>
+      <div class="chat-group-messages">
+        <button class="chat-bubble chat-bubble--sys-prompt" type="button" @click=${toggle}>
+          <span class="sys-prompt-label">System context</span>
+          <span class="sys-prompt-chevron">${vs.sysPromptOpen ? "▲" : "▼"}</span>
+        </button>
+        ${vs.sysPromptOpen
+          ? html`<div class="chat-bubble chat-bubble--sys-prompt-body">
+              <pre class="sys-prompt-pre">
 ${vs.sysPromptFetching ? "Loading…" : (vs.sysPromptContent ?? "")}</pre
-          >`
-        : nothing}
+              >
+            </div>`
+          : nothing}
+      </div>
     </div>
   `;
 }
@@ -947,6 +965,9 @@ export function renderChat(props: ChatProps) {
                 </div>
               </div>
             `
+          : nothing}
+        ${props.logMemoryGatewayUrl && !vs.searchOpen
+          ? renderSysPromptBubble(props.logMemoryGatewayUrl, requestUpdate)
           : nothing}
         ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
         ${isEmpty && vs.searchOpen
@@ -1274,9 +1295,6 @@ export function renderChat(props: ChatProps) {
         compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),
         onCompact: props.onCompact,
       })}
-      ${props.logMemoryGatewayUrl
-        ? renderSysPromptPanel(props.logMemoryGatewayUrl, requestUpdate)
-        : nothing}
       ${props.showNewMessages
         ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
