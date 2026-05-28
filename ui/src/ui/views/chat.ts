@@ -131,6 +131,10 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  // Gateway base URL (e.g. "http://127.0.0.1:18789") used to fetch the
+  // log-memory injected context panel. Populated only when the memory-core
+  // plugin is active. Omit to hide the panel.
+  logMemoryGatewayUrl?: string | null;
 };
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
@@ -165,6 +169,10 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  // Injected system prompt panel (log-memory).
+  sysPromptOpen: boolean;
+  sysPromptContent: string | null;
+  sysPromptFetching: boolean;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -179,6 +187,9 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    sysPromptOpen: false,
+    sysPromptContent: null,
+    sysPromptFetching: false,
   };
 }
 
@@ -787,6 +798,45 @@ function renderSlashMenu(
   `;
 }
 
+// Collapsible floating panel that shows the latest injected system prompt
+// (conversation_prompt.md) served by the memory-core plugin HTTP route.
+// Fetches lazily on first open and on every subsequent open.
+function renderSysPromptPanel(gatewayUrl: string, requestUpdate: () => void): TemplateResult {
+  const toggle = () => {
+    vs.sysPromptOpen = !vs.sysPromptOpen;
+    if (vs.sysPromptOpen && !vs.sysPromptFetching) {
+      vs.sysPromptFetching = true;
+      fetch(`${gatewayUrl}/api/log-memory/context`)
+        .then((r) => r.json() as Promise<{ ok: boolean; content: string | null }>)
+        .then((data) => {
+          vs.sysPromptContent = data.ok ? data.content : "(empty — no prompt injected yet)";
+        })
+        .catch(() => {
+          vs.sysPromptContent = "(fetch failed — is the gateway running?)";
+        })
+        .finally(() => {
+          vs.sysPromptFetching = false;
+          requestUpdate();
+        });
+    }
+    requestUpdate();
+  };
+
+  return html`
+    <div class="sys-prompt-panel ${vs.sysPromptOpen ? "sys-prompt-panel--open" : ""}">
+      <button class="sys-prompt-panel__toggle" type="button" @click=${toggle}>
+        ${icons.book ?? "📋"} System context
+        <span class="sys-prompt-panel__chevron">${vs.sysPromptOpen ? "▲" : "▼"}</span>
+      </button>
+      ${vs.sysPromptOpen
+        ? html`<pre class="sys-prompt-panel__body">
+${vs.sysPromptFetching ? "Loading…" : (vs.sysPromptContent ?? "")}</pre
+          >`
+        : nothing}
+    </div>
+  `;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -1224,6 +1274,9 @@ export function renderChat(props: ChatProps) {
         compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),
         onCompact: props.onCompact,
       })}
+      ${props.logMemoryGatewayUrl
+        ? renderSysPromptPanel(props.logMemoryGatewayUrl, requestUpdate)
+        : nothing}
       ${props.showNewMessages
         ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>

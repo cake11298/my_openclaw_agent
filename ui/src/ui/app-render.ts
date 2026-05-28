@@ -2542,6 +2542,11 @@ export function renderApp(state: AppViewState) {
                   allowExternalEmbedUrls: state.allowExternalEmbedUrls,
                   assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
                   basePath: state.basePath ?? "",
+                  // Convert ws(s):// → http(s):// so the UI can fetch the
+                  // log-memory HTTP route served by the gateway.
+                  logMemoryGatewayUrl: state.settings.gatewayUrl
+                    ? state.settings.gatewayUrl.replace(/^ws(s?):\/\//, "http$1://")
+                    : null,
                 }),
             )
           : nothing}
