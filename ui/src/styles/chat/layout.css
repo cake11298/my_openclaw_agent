@@ -1483,3 +1483,42 @@
   max-height: 260px;
   overflow-y: auto;
 }
+
+/* Injection trace table */
+.trace-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.trace-table th {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel-strong);
+}
+.trace-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.trace-row {
+  cursor: pointer;
+}
+.trace-row:hover td {
+  background: var(--panel-strong);
+}
+.trace-row.expanded td {
+  background: var(--panel-strong);
+  color: var(--text);
+}
+.trace-detail td {
+  padding: 0;
+}
+.trace-detail-pre {
+  max-height: 120px;
+  border-top: none;
+  border-radius: 0;
+}

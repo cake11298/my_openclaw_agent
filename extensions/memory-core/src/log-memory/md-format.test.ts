@@ -138,7 +138,7 @@ describe("md-format semantic", () => {
     });
     const out = serializeSemanticBlock(entry);
     expect(out).toBe(
-      `## [${ISO_TS}] Probe stuck pattern\nPattern: Repeated probe disconnects on diagfw.\nRoot cause: Jig misalignment.\nTags: service:diagfw, level:ERROR\nSource: dream_consolidation\n`,
+      `## [${ISO_TS}] Probe stuck pattern\nPattern: Repeated probe disconnects on diagfw.\nRoot cause: Jig misalignment.\nTags: service:diagfw, level:ERROR\nSource: dream_consolidation\nContentKey: 937f1096f77e84e4\n`,
     );
   });
 

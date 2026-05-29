@@ -20,17 +20,39 @@
 // next; trailing `Key: value` lines are metadata; everything else between the
 // heading and the trailing metadata block is the body.
 
-import { computeEntryId } from "./dedupe.js";
+import { computeContentKey, computeEntryId } from "./dedupe.js";
 import type { LogMemoryEntry, LogMemoryLayer, LogMemoryPayload } from "./types.js";
+
+// Content key embedded as a metadata field so KNOWLEDGE.md can be
+// deduplicated without parsing the full entry objects.
+// Same concept as MEMORY.md promotion markers, but uses the metadata format
+// so the block parser handles it cleanly.
+export function extractSemanticContentKeys(text: string): Set<string> {
+  const keys = new Set<string>();
+  for (const m of text.matchAll(/^ContentKey:\s*(\S+)/gm)) {
+    const k = m[1]?.trim();
+    if (k) keys.add(k);
+  }
+  return keys;
+}
 
 const HEADING_RE = /^## \[(?<ts>[^\]]+)\](?<rest>.*)$/;
 const META_LINE_RE = /^(?<key>[A-Za-z][A-Za-z _]*?):\s*(?<value>.*)$/;
 // `consolidatedAt` is optional — only present once the dream cycle has
 // consolidated the entry into the semantic layer.
 const EPISODIC_META_KEYS = new Set(["decay", "accessCount", "consolidatedAt"]);
-// `Type` and `Pinned` are optional — added when non-default so existing files
-// without them continue to parse correctly.
-const SEMANTIC_META_KEYS = new Set(["Pattern", "Root cause", "Tags", "Source", "Type", "Pinned"]);
+// `Type`, `Pinned`, `AccessCount`, and `ContentKey` are optional — added when
+// non-default so existing files without them continue to parse correctly.
+const SEMANTIC_META_KEYS = new Set([
+  "Pattern",
+  "Root cause",
+  "Tags",
+  "Source",
+  "Type",
+  "Pinned",
+  "AccessCount",
+  "ContentKey",
+]);
 
 export function serializeEpisodicBlock(entry: LogMemoryEntry): string {
   const heading = `## [${entry.timestamp.toISOString()}] ${entry.payload.tags.join(" ")}`.trimEnd();
@@ -49,6 +71,7 @@ export function serializeEpisodicBlock(entry: LogMemoryEntry): string {
 
 export function serializeSemanticBlock(entry: LogMemoryEntry): string {
   const title = entry.payload.title?.trim() || deriveTitle(entry.payload.content);
+  const contentKey = computeContentKey(entry.payload.content);
   const heading = `## [${entry.timestamp.toISOString()}] ${title}`.trimEnd();
   const pattern = sanitizeInline(entry.payload.content);
   const rootCause = sanitizeInline(entry.payload.rootCause ?? "");
@@ -68,6 +91,13 @@ export function serializeSemanticBlock(entry: LogMemoryEntry): string {
   if (entry.payload.pinned) {
     lines.push("Pinned: true");
   }
+  // AccessCount: usage counter incremented by the cheatsheet curator each time
+  // this entry helped answer a conversation turn.
+  if (entry.payload.accessCount > 0) {
+    lines.push(`AccessCount: ${entry.payload.accessCount}`);
+  }
+  // ContentKey: stable hash of normalized content for O(n) dedup on next write.
+  lines.push(`ContentKey: ${contentKey}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -227,6 +257,8 @@ function buildSemanticEntry(input: {
       ? "engineer_knowledge"
       : "error_pattern";
   const pinned = input.metadata.get("Pinned")?.trim().toLowerCase() === "true";
+  const accessCountRaw = input.metadata.get("AccessCount");
+  const accessCount = accessCountRaw ? Math.max(0, parseInt(accessCountRaw, 10) || 0) : 0;
   const id = computeEntryId({
     timestamp: input.timestamp,
     service: "semantic",
@@ -246,7 +278,7 @@ function buildSemanticEntry(input: {
       source,
       decayScore,
       pinned: pinned || undefined,
-      accessCount: 0,
+      accessCount,
       lastAccessedAt: input.timestamp,
       title,
       rootCause,

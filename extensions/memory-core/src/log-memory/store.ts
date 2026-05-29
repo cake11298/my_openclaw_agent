@@ -2,8 +2,19 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { computeCurrentDecay } from "./decay.js";
-import { parseBlocks, serializeEpisodicBlock, serializeSemanticBlock } from "./md-format.js";
+import { computeContentKey, jaccardWordSimilarity } from "./dedupe.js";
+import {
+  extractSemanticContentKeys,
+  parseBlocks,
+  serializeEpisodicBlock,
+  serializeSemanticBlock,
+} from "./md-format.js";
 import type { LogMemoryEntry, LogMemoryLayer } from "./types.js";
+
+// Jaccard word-overlap threshold above which two entries are treated as
+// semantic duplicates and the new one is skipped (same idea as MEMORY.md
+// promotion-marker dedup, but for near-paraphrase variants).
+const FUZZY_DEDUP_THRESHOLD = 0.55;
 
 // Layout under <workspaceDir>:
 //   log-memory/
@@ -67,11 +78,34 @@ export class LogMemoryStore {
     await fs.appendFile(filePath, ensureLeadingBlankLine(filePath, block), "utf8");
   }
 
-  async appendSemantic(entry: LogMemoryEntry): Promise<void> {
+  // Returns "written" | "exact_key_dup" | "fuzzy_dup"
+  async appendSemantic(entry: LogMemoryEntry): Promise<"written" | "exact_key_dup" | "fuzzy_dup"> {
     const filePath = this.semanticPath();
     await fs.mkdir(path.dirname(filePath), { recursive: true });
+
+    // 1. Content-key check (same approach as MEMORY.md promotion markers).
+    const contentKey = computeContentKey(entry.payload.content);
+    const existingText = await safeReadFile(filePath);
+    if (existingText !== null) {
+      const existingKeys = extractSemanticContentKeys(existingText);
+      if (existingKeys.has(contentKey)) {
+        return "exact_key_dup";
+      }
+      // 2. Jaccard fuzzy check: skip if any existing entry is very similar.
+      const existingEntries = parseBlocks(existingText, { layer: "semantic" });
+      for (const existing of existingEntries) {
+        if (
+          jaccardWordSimilarity(entry.payload.content, existing.payload.content) >=
+          FUZZY_DEDUP_THRESHOLD
+        ) {
+          return "fuzzy_dup";
+        }
+      }
+    }
+
     const block = serializeSemanticBlock(entry);
     await fs.appendFile(filePath, ensureLeadingBlankLine(filePath, block), "utf8");
+    return "written";
   }
 
   async overwriteSemantic(entries: LogMemoryEntry[]): Promise<void> {

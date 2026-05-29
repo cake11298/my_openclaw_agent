@@ -112,12 +112,6 @@ export class KnowledgeCapture {
     return this.opts.now?.() ?? new Date();
   }
 
-  private async findSemanticDuplicate(content: string): Promise<LogMemoryEntry | null> {
-    const needle = content.trim().toLowerCase();
-    const entries = await this.opts.store.loadSemantic();
-    return entries.find((e) => e.payload.content.trim().toLowerCase() === needle) ?? null;
-  }
-
   async maybeCapture(input: {
     message: string;
     tags?: string[];
@@ -139,17 +133,6 @@ export class KnowledgeCapture {
     // knowledge that should participate in normal decay and dream cycles.
     pinned?: boolean;
   }): Promise<KnowledgeCaptureRecord> {
-    // Dedup: return the existing entry without writing if the same content is
-    // already in KNOWLEDGE.md. Comparison is trimmed + lowercased to survive
-    // minor whitespace differences.
-    const duplicate = await this.findSemanticDuplicate(input.message);
-    if (duplicate) {
-      return {
-        entry: duplicate,
-        knowledgeFilePath: this.opts.store.semanticPath(),
-        alreadyExisted: true,
-      };
-    }
     const now = this.now();
     const isImplicitRule = detectImplicitRule(input.message);
     const type = isImplicitRule ? "conversation_rule" : "engineer_knowledge";
@@ -175,7 +158,14 @@ export class KnowledgeCapture {
         title: input.title,
       },
     };
-    await this.opts.store.appendSemantic(entry);
+    const result = await this.opts.store.appendSemantic(entry);
+    if (result !== "written") {
+      return {
+        entry,
+        knowledgeFilePath: this.opts.store.semanticPath(),
+        alreadyExisted: true,
+      };
+    }
     return { entry, knowledgeFilePath: this.opts.store.semanticPath() };
   }
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { computeEntryId } from "./dedupe.js";
+import { parseBlocks, serializeSemanticBlock } from "./md-format.js";
 import type { LogMemoryStore } from "./store.js";
 import type { LogMemoryEntry } from "./types.js";
 
@@ -25,46 +25,109 @@ type SubagentSurface = {
   deleteSession: (p: { sessionKey: string }) => Promise<void>;
 };
 
-const CURATOR_TIMEOUT_MS = 45_000;
+const CURATOR_TIMEOUT_MS = 60_000;
 
-const CURATOR_SYSTEM_PROMPT = `You are a conservative knowledge curator for an engineering workspace memory system.
-Your job: identify semantic overlaps between rules — including non-obvious, implicit overlaps.
-When in doubt, do NOT merge. Preserving all information is always safer than losing it.`;
+// Cheatsheet-style curator: every time a new entry is captured, the curator
+// sees the full KNOWLEDGE.md + the new entry + optional conversation context
+// and decides the COMPLETE new state of KNOWLEDGE.md (can add, merge, prune,
+// update AccessCount). This prevents unbounded growth and keeps the knowledge
+// base high-value and non-redundant.
+const CURATOR_SYSTEM_PROMPT = `You are a Knowledge Curator for an engineering workspace memory system.
+Your role: maintain KNOWLEDGE.md as a compact, evolving "cheatsheet" of high-value engineering insights.
+
+### Core Responsibilities
+
+**Selective Knowledge Retention**
+- Preserve only high-value, generalizable patterns/rules/solutions that apply across problems
+- Discard redundant, trivial, or highly problem-specific entries that do not generalize
+- Total entries must stay under 30 to prevent unbounded growth
+
+**Continuous Refinement**
+- Merge entries that address the same topic or constraint (prefer merging over keeping duplicates)
+- Remove entries that are outdated, superseded, or no longer relevant
+- Improve clarity or generalizability of existing entries where possible
+- If a better approach than a previously recorded one is found, replace the old version
+
+**Usage Tracking**
+- Increment AccessCount for any existing entry that was relevant to the current conversation turn
+- Entries with higher AccessCount are more valuable — preserve them over rarely used ones
+
+**Structure**
+- Pinned: true → injected into every LLM call (mandatory rules, naming conventions, critical policies)
+- No Pinned line → recalled only when relevant (debug solutions, specific fixes)
+- AccessCount starts at 1 for new entries; increment each time an entry proves relevant
+
+### KNOWLEDGE.md Block Format
+
+Each entry must use exactly this format:
+\`\`\`
+## [2026-05-29T12:00:00.000Z] Short descriptive title
+Pattern: [concise rule, insight, or solution — one line]
+Root cause: [why this matters — omit this line entirely if not applicable]
+Tags: tag1, tag2
+Source: conversation_capture
+Pinned: true
+AccessCount: N
+\`\`\`
+
+IMPORTANT: Do NOT include a ContentKey line — it is computed automatically on write.
+Use realistic ISO timestamps. For new entries use the current session timestamp.
+For existing entries preserve their original timestamps.
+
+### Output Format
+
+Respond with the COMPLETE new KNOWLEDGE.md after your curation:
+
+FULL_REWRITE:
+[all entries you decide to keep, merged, pruned, or updated]
+
+If absolutely nothing needs to change (new entry already well-represented, no pruning needed):
+NO_CHANGE`;
+
+function buildPrompt(
+  existing: LogMemoryEntry[],
+  newEntry: LogMemoryEntry,
+  conversationContext?: { userMessage: string; assistantResponse: string },
+): string {
+  const lines: string[] = ["## EXISTING KNOWLEDGE.md"];
+
+  if (existing.length === 0) {
+    lines.push("(empty — no prior entries)");
+  } else {
+    for (let i = 0; i < existing.length; i++) {
+      const e = existing[i];
+      const accessStr = e.payload.accessCount > 0 ? ` [AccessCount:${e.payload.accessCount}]` : "";
+      const pinnedStr = e.payload.pinned ? " [Pinned]" : "";
+      lines.push(
+        `[${i}]${pinnedStr}${accessStr} ${e.payload.content.replace(/\n/g, " ").slice(0, 300)}`,
+      );
+    }
+  }
+
+  lines.push("", "## NEWLY CAPTURED ENTRY");
+  const kind = newEntry.payload.tags.find((t) => t.startsWith("kind:")) ?? "";
+  const pinnedStr = newEntry.payload.pinned ? " [Pinned]" : "";
+  lines.push(`${kind}${pinnedStr}: ${newEntry.payload.content.replace(/\n/g, " ").slice(0, 400)}`);
+
+  if (conversationContext) {
+    lines.push("", "## CONVERSATION CONTEXT");
+    lines.push(`User: ${conversationContext.userMessage.slice(0, 500)}`);
+    lines.push(`Assistant: ${conversationContext.assistantResponse.slice(0, 800)}`);
+  }
+
+  lines.push(
+    "",
+    "Curate KNOWLEDGE.md. Preserve all high-value entries.",
+    "Merge entries that address the same topic. Prune redundancy.",
+    "Increment AccessCount for entries relevant to this turn.",
+    "Keep total entries ≤ 30.",
+  );
+  return lines.join("\n");
+}
 
 function buildSessionKey(workspaceDir: string): string {
   const hash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
   return `knowledge-curator-${hash}-${Date.now()}`;
-}
-
-function buildPrompt(existing: LogMemoryEntry[], newEntry: LogMemoryEntry): string {
-  const lines: string[] = [
-    "Check if the NEW ENTRY semantically overlaps with any EXISTING ENTRY.",
-    "Overlaps include non-obvious or implicit domain-based similarities.",
-    'Example: "linked list nodes use typedef" and "all pointers end with _lobster" might',
-    "both be C data-structure conventions — that counts as overlap.",
-    "",
-    "EXISTING ENTRIES:",
-  ];
-  for (let i = 0; i < existing.length; i++) {
-    lines.push(`[${i}] ${existing[i].payload.content.replace(/\n/g, " ").slice(0, 400)}`);
-  }
-  lines.push(
-    "",
-    `NEW ENTRY [${existing.length}]:`,
-    newEntry.payload.content.replace(/\n/g, " ").slice(0, 400),
-    "",
-    "Rules:",
-    "- Only merge when the overlap is clear. If uncertain, output NO_MERGE.",
-    "- A merged entry must preserve ALL information from every entry being merged.",
-    "- You may only merge the NEW ENTRY with at most one or two existing entries.",
-    "",
-    "If there IS meaningful overlap, respond with exactly one line:",
-    "MERGE [comma-separated indices including the new entry's index] NEW_CONTENT: {merged rule text}",
-    "",
-    "If there is NO overlap, respond with exactly:",
-    "NO_MERGE",
-  );
-  return lines.join("\n");
 }
 
 function extractAssistantText(messages: unknown[]): string | null {
@@ -93,27 +156,13 @@ function extractAssistantText(messages: unknown[]): string | null {
   return null;
 }
 
-interface MergeInstruction {
-  indices: number[];
-  newContent: string;
-}
-
-function parseResponse(response: string, totalCount: number): MergeInstruction | null {
+function parseResponse(response: string): LogMemoryEntry[] | null {
   const trimmed = response.trim();
-  if (trimmed.startsWith("NO_MERGE")) return null;
-
-  const m = trimmed.match(/^MERGE\s*\[([^\]]+)\]\s*NEW_CONTENT:\s*([\s\S]+)/i);
-  if (!m) return null;
-
-  const indices = m[1]
-    .split(",")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !Number.isNaN(n) && n >= 0 && n < totalCount);
-  const newContent = m[2].trim();
-
-  // Require at least the new entry + one existing entry, and a non-empty result.
-  if (indices.length < 2 || !newContent) return null;
-  return { indices, newContent };
+  if (trimmed.startsWith("NO_CHANGE")) return null;
+  const m = trimmed.match(/^FULL_REWRITE:\s*\n([\s\S]+)/i);
+  if (!m?.[1]?.trim()) return null;
+  const entries = parseBlocks(m[1].trim(), { layer: "semantic" });
+  return entries.length > 0 ? entries : null;
 }
 
 // Soft lock: at most one curator running per workspace at a time.
@@ -124,9 +173,11 @@ export async function curateKnowledgeMd(params: {
   store: LogMemoryStore;
   workspaceDir: string;
   newEntry: LogMemoryEntry;
+  // Optional: full turn context helps the curator decide AccessCount increments.
+  conversationContext?: { userMessage: string; assistantResponse: string };
   logger: { warn: (msg: string) => void };
 }): Promise<void> {
-  const { subagent, store, workspaceDir, newEntry, logger } = params;
+  const { subagent, store, workspaceDir, newEntry, conversationContext, logger } = params;
 
   if (curating.has(workspaceDir)) return;
   curating.add(workspaceDir);
@@ -134,13 +185,13 @@ export async function curateKnowledgeMd(params: {
   const sessionKey = buildSessionKey(workspaceDir);
   try {
     const allEntries = await store.loadSemantic();
+    // Show existing entries excluding the one just written (it appears separately).
     const existing = allEntries.filter((e) => e.id !== newEntry.id);
-    if (existing.length === 0) return;
 
     const { runId } = await subagent.run({
       idempotencyKey: sessionKey,
       sessionKey,
-      message: buildPrompt(existing, newEntry),
+      message: buildPrompt(existing, newEntry, conversationContext),
       extraSystemPrompt: CURATOR_SYSTEM_PROMPT,
       lane: `knowledge-curator:${sessionKey}`,
       lightContext: true,
@@ -149,7 +200,7 @@ export async function curateKnowledgeMd(params: {
 
     const result = await subagent.waitForRun({ runId, timeoutMs: CURATOR_TIMEOUT_MS });
     if (result.status !== "ok") {
-      logger.warn(`log-memory: curator run ended with status=${result.status}`);
+      logger.warn(`log-memory: curator ended with status=${result.status}`);
       return;
     }
 
@@ -160,32 +211,12 @@ export async function curateKnowledgeMd(params: {
       return;
     }
 
-    // totalCount = existing entries + 1 new entry, matching prompt indices.
-    const instruction = parseResponse(response, existing.length + 1);
-    if (!instruction) return;
+    const newEntries = parseResponse(response);
+    if (newEntries === null) return; // NO_CHANGE
 
-    // Build the merged entry from the collected content.
-    const all = [...existing, newEntry];
-    const mergeSet = new Set(instruction.indices);
-    const kept = all.filter((_, i) => !mergeSet.has(i));
-    const mergedTags = [...new Set(instruction.indices.flatMap((i) => all[i]?.payload.tags ?? []))];
-    const merged: LogMemoryEntry = {
-      ...newEntry,
-      id: computeEntryId({
-        timestamp: newEntry.timestamp,
-        service: "curator",
-        message: instruction.newContent,
-      }),
-      payload: {
-        ...newEntry.payload,
-        content: instruction.newContent,
-        tags: mergedTags,
-      },
-    };
-
-    await store.overwriteSemantic([...kept, merged]);
+    await store.overwriteSemantic(newEntries);
     logger.warn(
-      `log-memory: curator merged ${instruction.indices.length} entries → 1 [workspace=${workspaceDir}]`,
+      `log-memory: curator compacted KNOWLEDGE.md → ${newEntries.length} entries [workspace=${workspaceDir}]`,
     );
   } catch (err) {
     logger.warn(`log-memory: curator failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -194,3 +225,7 @@ export async function curateKnowledgeMd(params: {
     subagent.deleteSession({ sessionKey }).catch(() => {});
   }
 }
+
+// Re-export serializeSemanticBlock so callers that previously imported it from
+// here (before the refactor) don't need to update their import path.
+export { serializeSemanticBlock };

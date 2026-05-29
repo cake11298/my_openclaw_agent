@@ -173,6 +173,11 @@ interface ChatEphemeralState {
   sysPromptOpen: boolean;
   sysPromptContent: string | null;
   sysPromptFetching: boolean;
+  // Per-turn injection trace.
+  traceOpen: boolean;
+  traceFetching: boolean;
+  traceData: TurnTrace[];
+  traceExpandedIndex: number | null;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -190,6 +195,10 @@ function createChatEphemeralState(): ChatEphemeralState {
     sysPromptOpen: false,
     sysPromptContent: null,
     sysPromptFetching: false,
+    traceOpen: false,
+    traceFetching: false,
+    traceData: [],
+    traceExpandedIndex: null,
   };
 }
 
@@ -798,6 +807,122 @@ function renderSlashMenu(
   `;
 }
 
+interface TurnTrace {
+  ts: string;
+  sessionId: string;
+  sessionKey?: string;
+  runId: string;
+  turnIndex: number;
+  provider: string;
+  model: string;
+  systemChars: number;
+  promptChars: number;
+  historyChars: number;
+  historyMsgCount: number;
+  imagesCount: number;
+  knowledgeChars: number;
+  totalInputChars: number;
+}
+
+function fmt(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function renderTraceBubble(gatewayUrl: string, requestUpdate: () => void): TemplateResult {
+  const fetchTrace = () => {
+    if (vs.traceFetching) return;
+    vs.traceFetching = true;
+    fetch(`${gatewayUrl}/api/log-memory/trace?limit=30`)
+      .then((r) => r.json() as Promise<{ ok: boolean; turns: TurnTrace[] }>)
+      .then((data) => {
+        vs.traceData = data.ok ? [...data.turns].reverse() : [];
+      })
+      .catch(() => {
+        vs.traceData = [];
+      })
+      .finally(() => {
+        vs.traceFetching = false;
+        requestUpdate();
+      });
+  };
+
+  const toggle = () => {
+    vs.traceOpen = !vs.traceOpen;
+    if (vs.traceOpen) fetchTrace();
+    requestUpdate();
+  };
+
+  const totalChars = vs.traceData[0]?.totalInputChars ?? 0;
+  const turns = vs.traceData.length;
+  const label = vs.traceOpen
+    ? `▲ Injection trace (${turns} turns)`
+    : `▼ Injection trace${totalChars ? ` · last ${fmt(totalChars)} chars` : ""}`;
+
+  return html`
+    <div class="chat-group chat-group--sys-prompt user">
+      <div class="chat-group-messages">
+        <button class="chat-bubble chat-bubble--sys-prompt" type="button" @click=${toggle}>
+          <span class="sys-prompt-label">${label}</span>
+        </button>
+        ${vs.traceOpen
+          ? html`<div class="chat-bubble chat-bubble--sys-prompt-body">
+              ${vs.traceFetching
+                ? html`<pre class="sys-prompt-pre">Loading…</pre>`
+                : vs.traceData.length === 0
+                  ? html`<pre class="sys-prompt-pre">(no turns recorded yet)</pre>`
+                  : html`<table class="trace-table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Time</th>
+                          <th>Total</th>
+                          <th>Knowledge</th>
+                          <th>History</th>
+                          <th>Msgs</th>
+                          <th>Model</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${vs.traceData.map(
+                          (t, i) => html`<tr
+                              class="trace-row ${vs.traceExpandedIndex === i ? "expanded" : ""}"
+                              @click=${() => {
+                                vs.traceExpandedIndex = vs.traceExpandedIndex === i ? null : i;
+                                requestUpdate();
+                              }}
+                            >
+                              <td>${t.turnIndex}</td>
+                              <td>${new Date(t.ts).toLocaleTimeString()}</td>
+                              <td>${fmt(t.totalInputChars)}</td>
+                              <td>${t.knowledgeChars ? fmt(t.knowledgeChars) : "—"}</td>
+                              <td>${fmt(t.historyChars)}</td>
+                              <td>${t.historyMsgCount}</td>
+                              <td>${t.model.split("/").pop()}</td>
+                            </tr>
+                            ${vs.traceExpandedIndex === i
+                              ? html`<tr class="trace-detail">
+                                  <td colspan="7">
+                                    <pre class="sys-prompt-pre trace-detail-pre">
+session: ${t.sessionKey ?? t.sessionId}
+run: ${t.runId}
+system: ${fmt(t.systemChars)} chars  prompt: ${fmt(t.promptChars)} chars  history: ${fmt(
+                                        t.historyChars,
+                                      )} chars${t.imagesCount ? `  images: ${t.imagesCount}` : ""}
+knowledge injected: ${t.knowledgeChars ? fmt(t.knowledgeChars) + " chars" : "none"}</pre
+                                    >
+                                  </td>
+                                </tr>`
+                              : nothing}`,
+                        )}
+                      </tbody>
+                    </table>`}
+            </div>`
+          : nothing}
+      </div>
+    </div>
+  `;
+}
+
 // Shows the injected system prompt as a collapsible chat-bubble styled row
 // at the top of the thread, on the user (right) side.
 // Re-fetches on every open so the content stays fresh across turns.
@@ -954,7 +1079,8 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         ${props.logMemoryGatewayUrl && !vs.searchOpen
-          ? renderSysPromptBubble(props.logMemoryGatewayUrl, requestUpdate)
+          ? html`${renderSysPromptBubble(props.logMemoryGatewayUrl, requestUpdate)}
+            ${renderTraceBubble(props.logMemoryGatewayUrl, requestUpdate)}`
           : nothing}
         ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
         ${isEmpty && vs.searchOpen
